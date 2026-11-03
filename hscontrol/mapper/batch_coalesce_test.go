@@ -137,3 +137,77 @@ func TestAppendPendingBoundsFoldedPatches(t *testing.T) {
 	assert.True(t, pending[0].IsFull(), "a backlog past the cap must collapse to a full map")
 	assert.LessOrEqual(t, countPatches(pending), maxPendingSize, "pending must not keep every patch")
 }
+
+// TestAppendPendingFoldRecoversAfterOversizedFold pins the regression where a
+// single fold whose output exceeded half the cap latched pendingFoldAt above
+// maxPendingSize. Once latched, the fold condition (pendingSize >=
+// pendingFoldAt) could never be satisfied before the collapse condition
+// (pendingSize > maxPendingSize) fired, so every subsequent overflow collapsed
+// to a full netmap instead of coalescing — degrading update efficiency for the
+// life of the connection, which outlives reconnects. Clamping the re-armed
+// threshold at the cap keeps the fold path reachable, so a backlog that
+// re-fills after an oversized fold folds again instead of collapsing.
+func TestAppendPendingFoldRecoversAfterOversizedFold(t *testing.T) {
+	id := types.NodeID(1)
+	nc := newMultiChannelNodeConn(id, nil)
+	nc.inFlight.Store(true)
+
+	// A single burst of patch-only changes for distinct peers coalesces into
+	// one change carrying every patch; its post-fold size (1 + burstPeers)
+	// exceeds half the cap, so 2*post-fold would arm the threshold above
+	// maxPendingSize without the clamp.
+	const burstPeers = 200
+
+	burst := make([]change.Change, 0, burstPeers)
+	for i := range burstPeers {
+		burst = append(burst, change.NodeOnline(types.NodeID(i+1000)))
+	}
+
+	nc.appendPending(burst...)
+
+	nc.pendingMu.Lock()
+	require.NotEmpty(t, nc.pending)
+	require.False(t, nc.pending[0].IsFull(), "burst must fold, not collapse")
+	require.Greater(t, nc.pendingSize, maxPendingSize/2, "post-fold size must exceed half the cap to arm the latch")
+	assert.LessOrEqual(t, nc.pendingFoldAt, maxPendingSize, "pendingFoldAt must never arm above the collapse cap")
+	nc.pendingMu.Unlock()
+
+	// A drain models the in-flight bundle being delivered; pending clears but
+	// the latched pendingFoldAt is the state that survives it.
+	nc.drainPending()
+
+	// Re-filling the backlog under the same connection must fold again, not
+	// collapse. Append patch-only changes for distinct peers one at a time:
+	// each contributes 2 size units, so the fold (fixed) or collapse (buggy)
+	// fires around maxPendingSize/2 appends.
+	const trailingPeers = maxPendingSize/2 + 5
+
+	for i := range trailingPeers {
+		nc.appendPending(change.NodeOnline(types.NodeID(i + 2000)))
+	}
+
+	nc.pendingMu.Lock()
+	pending := slices.Clone(nc.pending)
+	nc.pendingMu.Unlock()
+
+	require.NotEmpty(t, pending)
+	assert.False(t, pending[0].IsFull(), "a re-filled backlog must fold, not collapse to a full netmap, after an oversized fold")
+	assert.Positive(t, countPatches(pending), "the re-filled backlog must be coalesced into patches, not collapsed to a full map")
+
+	// Folding must keep working across drain cycles, not just once. Drain
+	// and re-fill a second time and require the same behavior: a re-connect
+	// inherits the connection object, so a stale threshold must not disable
+	// folding on the next backlog either.
+	nc.drainPending()
+
+	for i := range trailingPeers {
+		nc.appendPending(change.NodeOnline(types.NodeID(i + 3000)))
+	}
+
+	nc.pendingMu.Lock()
+	pending = slices.Clone(nc.pending)
+	nc.pendingMu.Unlock()
+
+	assert.False(t, pending[0].IsFull(), "folding must remain reachable across drain cycles")
+	assert.Positive(t, countPatches(pending), "the backlog must remain coalesced across drain cycles")
+}

@@ -368,9 +368,15 @@ func (mc *multiChannelNodeConn) appendPending(changes ...change.Change) {
 	// workers it grew by every change; it renders folded anyway, and
 	// folding twice gives what folding once does. Folding first leaves the
 	// cap's collapse to a full map for backlogs that do not fold.
+	// Clamp the re-armed threshold to the collapse cap so a fold whose
+	// output exceeds half the cap does not latch the threshold above
+	// maxPendingSize, which would permanently disable folding and force
+	// every future overflow to collapse to a full netmap. Keeping the
+	// fold reachable (pendingSize >= pendingFoldAt fires at or before
+	// pendingSize > maxPendingSize) preserves the amortized-O(1) design.
 	if !fullAtHead && mc.pendingSize >= max(mc.pendingFoldAt, minPendingFold) {
 		mc.setPendingLocked(change.CoalescePeerDeltas(mc.id, change.DedupePolicyChanges(mc.pending)))
-		mc.pendingFoldAt = 2 * mc.pendingSize
+		mc.pendingFoldAt = min(2*mc.pendingSize, maxPendingSize)
 	}
 
 	if fullAtHead || mc.pendingSize > maxPendingSize {

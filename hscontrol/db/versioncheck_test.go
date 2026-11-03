@@ -514,15 +514,23 @@ func checkVersionUpgradePathFromVersions(db *gorm.DB, currentVersion string) err
 
 func TestCheckMinimumMigration(t *testing.T) {
 	tests := []struct {
-		name    string
-		ids     []string // nil means no migrations table
-		wantErr bool
+		name         string
+		ids          []string // nil means no migrations table
+		legacyTables []string // core tables to create without a migrations table
+		wantErr      bool
 	}{
 		{name: "no migrations table", ids: nil},
 		{name: "empty migrations table", ids: []string{}},
 		{name: "0.29 database", ids: []string{"SCHEMA_INIT", minimumMigrationID}},
 		{name: "created fresh by this release", ids: []string{"SCHEMA_INIT", "202606181200-recover-null-tags-node-user-id"}},
 		{name: "0.28 database", ids: []string{"SCHEMA_INIT", "202601121700-migrate-hostinfo-request-tags"}, wantErr: true},
+		// Pre-0.23 databases predate gormigrate and have no migrations
+		// table, but do have legacy core tables. They must be rejected
+		// rather than treated as fresh.
+		{name: "pre-0.23 database with users table", ids: nil, legacyTables: []string{"users"}, wantErr: true},
+		{name: "pre-0.23 database with machines table", ids: nil, legacyTables: []string{"machines"}, wantErr: true},
+		{name: "pre-0.23 database with nodes table", ids: nil, legacyTables: []string{"nodes"}, wantErr: true},
+		{name: "pre-0.23 database with all legacy tables", ids: nil, legacyTables: []string{"users", "machines", "pre_auth_keys", "api_keys", "routes"}, wantErr: true},
 	}
 
 	for _, tt := range tests {
@@ -536,6 +544,10 @@ func TestCheckMinimumMigration(t *testing.T) {
 				for _, id := range tt.ids {
 					require.NoError(t, db.Exec("INSERT INTO migrations (id) VALUES (?)", id).Error)
 				}
+			}
+
+			for _, table := range tt.legacyTables {
+				require.NoError(t, db.Exec(fmt.Sprintf("CREATE TABLE %s (id integer PRIMARY KEY)", table)).Error)
 			}
 
 			err = checkMinimumMigration(db)

@@ -169,6 +169,7 @@ the ACME DNS-01 challenge through a built-in DNS provider: `acmedns`,
 
 ### Changes
 
+- A pre-0.23 database (which predates gormigrate and has no `migrations` table) is now rejected with `errDatabaseTooOld` instead of being treated as a fresh database; previously `checkMinimumMigration` let it through, gormigrate's `InitSchema` stamped every migration ID without running it, and the legacy `machines` data was orphaned
 - PostgreSQL connection settings are assembled into a `postgres://` URL with proper escaping, so a password (or host, user, database name) containing spaces, quotes or other reserved characters no longer truncates the DSN [#3477](https://github.com/juanfont/headscale/pull/3477)
 - Expiring or deleting a non-existent pre-auth key now returns an error instead of silently succeeding [#3324](https://github.com/juanfont/headscale/pull/3324)
 - Improve systemd service file hardening [#3341](https://github.com/juanfont/headscale/pull/3341)

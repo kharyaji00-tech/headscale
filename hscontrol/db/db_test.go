@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -768,6 +769,120 @@ func TestSQLiteRejectsPre029Database(t *testing.T) {
 		Policy: types.PolicyConfig{Mode: types.PolicyModeDB},
 	})
 	require.ErrorIs(t, err, errDatabaseTooOld)
+}
+
+// TestSQLiteRejectsPre023Database ensures a pre-0.23 database (created
+// before gormigrate introduced the migrations table in 0.23.0) is refused
+// rather than being treated as a fresh database. Without the fix,
+// checkMinimumMigration's HasTable("migrations") heuristic would let it
+// through, gormigrate's InitSchema would stamp every migration ID without
+// running it, and the legacy machines data would be orphaned.
+func TestSQLiteRejectsPre023Database(t *testing.T) {
+	dbPath := t.TempDir() + "/headscale_test.db"
+
+	err := createSQLiteFromSQLFile("testdata/sqlite_too_old/headscale_0.22.0_dump.sql", dbPath)
+	require.NoError(t, err)
+
+	_, err = NewHeadscaleDatabase(&types.Config{
+		Database: types.DatabaseConfig{
+			Type:   "sqlite3",
+			Sqlite: types.SqliteConfig{Path: dbPath},
+		},
+		Policy: types.PolicyConfig{Mode: types.PolicyModeDB},
+	})
+	require.ErrorIs(t, err, errDatabaseTooOld)
+
+	// The database must not have been mutated: no migrations table should
+	// have been stamped and the legacy machines data must still be present.
+	// This confirms the rejection happened before gormigrate's InitSchema.
+	rawDB, err := sql.Open("sqlite", dbPath)
+	require.NoError(t, err)
+
+	defer rawDB.Close()
+
+	var migrationsCount int
+
+	err = rawDB.QueryRowContext(context.Background(), "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='migrations'").Scan(&migrationsCount)
+	require.NoError(t, err)
+	assert.Equal(t, 0, migrationsCount, "migrations table must not be created by a rejected startup")
+
+	var machinesCount int
+
+	err = rawDB.QueryRowContext(context.Background(), "SELECT count(*) FROM machines").Scan(&machinesCount)
+	require.NoError(t, err)
+	assert.Equal(t, 3, machinesCount, "legacy machines data must be untouched")
+}
+
+// TestPostgresRejectsPre023Database ensures a pre-0.23 Postgres database
+// (created before gormigrate introduced the migrations table in 0.23.0)
+// is refused rather than being treated as a fresh database. The fix is
+// dialect-agnostic (db.Migrator().HasTable), so the same legacy-table guard
+// that protects SQLite must also protect Postgres.
+func TestPostgresRejectsPre023Database(t *testing.T) {
+	u := newPostgresDBForTest(t)
+
+	// Build a v0.22-era Postgres schema: legacy core tables with real
+	// data, but no gormigrate "migrations" table and no database_versions
+	// table. This mirrors the SQLite fixture in
+	// testdata/sqlite_too_old/headscale_0.22.0_dump.sql.
+	raw, err := sql.Open("pgx", u.String())
+	require.NoError(t, err)
+
+	defer func() {
+		require.NoError(t, raw.Close())
+	}()
+
+	legacySchema := []string{
+		`CREATE TABLE "users" (id integer PRIMARY KEY, created_at timestamp, updated_at timestamp, deleted_at timestamp, name text)`,
+		`INSERT INTO "users" VALUES (1, '2023-06-01 10:00:00', '2023-06-01 10:00:00', NULL, 'alice')`,
+		`INSERT INTO "users" VALUES (2, '2023-06-01 11:00:00', '2023-06-01 11:00:00', NULL, 'bob')`,
+		`CREATE TABLE "machines" (id integer PRIMARY KEY, machine_key text, node_key text, hostname text, user_id integer, last_seen timestamp, expiry timestamp)`,
+		`INSERT INTO "machines" VALUES (1, 'mkey1', 'nkey1', 'alice-laptop', 1, '2023-06-01 12:00:00', NULL)`,
+		`INSERT INTO "machines" VALUES (2, 'mkey2', 'nkey2', 'bob-desktop', 2, '2023-06-01 12:00:00', NULL)`,
+		`INSERT INTO "machines" VALUES (3, 'mkey3', 'nkey3', 'shared-server', 1, '2023-06-01 12:00:00', NULL)`,
+		`CREATE TABLE "pre_auth_keys" (id integer PRIMARY KEY, key text, user_id integer, reusable boolean, ephemeral boolean, used boolean, created_at timestamp, expiration timestamp)`,
+		`CREATE TABLE "api_keys" (id integer PRIMARY KEY, prefix text, hash bytea, created_at timestamp, expiration timestamp, last_seen timestamp)`,
+	}
+
+	for _, stmt := range legacySchema {
+		_, err := raw.ExecContext(context.Background(), stmt)
+		require.NoError(t, err, stmt)
+	}
+
+	// NewHeadscaleDatabase must reject this database before any mutation.
+	_, err = NewHeadscaleDatabase(&types.Config{
+		Database: types.DatabaseConfig{
+			Type: types.DatabasePostgres,
+			Postgres: types.PostgresConfig{
+				Host: u.Hostname(),
+				User: u.User.Username(),
+				Name: strings.TrimLeft(u.Path, "/"),
+				Pass: "",
+				Port: func() int {
+					p, _ := strconv.Atoi(u.Port())
+
+					return p
+				}(),
+				Ssl: "disable",
+			},
+		},
+		Policy: types.PolicyConfig{Mode: types.PolicyModeDB},
+	})
+	require.ErrorIs(t, err, errDatabaseTooOld)
+
+	// The database must not have been mutated: no migrations table should
+	// have been created and the legacy machines data must still be present.
+	var migrationsCount int
+
+	err = raw.QueryRowContext(context.Background(), "SELECT count(*) FROM information_schema.tables WHERE table_name = 'migrations'").Scan(&migrationsCount)
+	require.NoError(t, err)
+	assert.Equal(t, 0, migrationsCount, "migrations table must not be created by a rejected startup")
+
+	var machinesCount int
+
+	err = raw.QueryRowContext(context.Background(), "SELECT count(*) FROM machines").Scan(&machinesCount)
+	require.NoError(t, err)
+	assert.Equal(t, 3, machinesCount, "legacy machines data must be untouched")
 }
 
 // TestSQLiteAllTestdataMigrations tests migration compatibility across all SQLite schemas

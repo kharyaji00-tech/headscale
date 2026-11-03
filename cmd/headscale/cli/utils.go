@@ -393,8 +393,24 @@ func printError(err error, outputFormat string) {
 	fmt.Fprintf(os.Stderr, "%s\n", out)
 }
 
+// isMachineOutputFormat reports whether outputFormat names a machine-readable
+// format that requires keeping stdout free of log/auxiliary output.
+func isMachineOutputFormat(outputFormat string) bool {
+	return slices.Contains(
+		[]string{outputFormatJSON, outputFormatJSONLine, outputFormatYAML},
+		outputFormat,
+	)
+}
+
+// hasMachineOutputFlag reports whether the user requested a machine-readable
+// output format via the parsed --output/-o flag.
+//
+// It reads the parsed flag value rather than scanning raw os.Args so that every
+// valid cobra/pflag spelling (--output json, --output=json, -o json, -ojson) is
+// detected, and a positional argument that happens to equal a format name
+// (e.g. `headscale users destroy json`) does not silently disable logging.
 func hasMachineOutputFlag() bool {
-	return slices.ContainsFunc(os.Args, func(arg string) bool {
-		return arg == outputFormatJSON || arg == outputFormatJSONLine || arg == outputFormatYAML
-	})
+	outputFormat, _ := rootCmd.PersistentFlags().GetString("output")
+
+	return isMachineOutputFormat(outputFormat)
 }

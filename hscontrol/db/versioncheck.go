@@ -188,6 +188,21 @@ func isDev(version string) bool {
 // which only exists since 0.29.0 and is skipped for dev builds.
 func checkMinimumMigration(db *gorm.DB) error {
 	if !db.Migrator().HasTable("migrations") {
+		// A missing migrations table only means "fresh database" when no
+		// legacy or current core tables exist either. Pre-0.23 databases
+		// predate gormigrate (which introduced the migrations table in
+		// 0.23.0) and therefore also lack it; treating them as fresh
+		// would let gormigrate's InitSchema stamp every migration ID
+		// without running it, orphaning the legacy machines/users data.
+		// Reject them up-front, like 0.24-0.28 databases are.
+		if db.Migrator().HasTable("users") ||
+			db.Migrator().HasTable("machines") ||
+			db.Migrator().HasTable("nodes") {
+			return fmt.Errorf("upgrade to the latest v0.29.x release first, "+
+				"release page: https://github.com/juanfont/headscale/releases: %w",
+				errDatabaseTooOld)
+		}
+
 		return nil
 	}
 

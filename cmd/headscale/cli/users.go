@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -104,8 +105,9 @@ func lookupUser(
 		params.Name = &username
 	}
 
+	var idStr string
 	if id != 0 {
-		idStr := strconv.FormatUint(id, util.Base10)
+		idStr = strconv.FormatUint(id, util.Base10)
 		params.Id = &idStr
 	}
 
@@ -119,6 +121,17 @@ func lookupUser(
 	}
 
 	users := resp.JSON200.Users
+
+	// The server applies the name, email, and id filters as an exclusive
+	// precedence switch (see listUsersFiltered in hscontrol/api/v1/users.go),
+	// so a name filter silently drops the id. Enforce the pinned id
+	// client-side so a destructive command can never act on a user
+	// selected only by name.
+	if idStr != "" {
+		users = slices.DeleteFunc(users, func(u clientv1.User) bool {
+			return u.Id != idStr
+		})
+	}
 
 	switch len(users) {
 	case 0:

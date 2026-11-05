@@ -14,28 +14,37 @@ import (
 )
 
 // filterUsersServer serves GET /api/v1/user responses filtered like the
-// real API: by the id, name, and email query parameters.
+// real API: the name, email, and id query parameters are an exclusive
+// precedence switch (name, then email, then id), not an AND.
 func filterUsersServer(t *testing.T, users []clientv1.User) *httptest.Server {
 	t.Helper()
 
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query()
 
-		filtered := make([]clientv1.User, 0, len(users))
-		for _, user := range users {
-			if name := query.Get("name"); name != "" && user.Name != name {
-				continue
-			}
+		var filtered []clientv1.User
 
-			if id := query.Get("id"); id != "" && user.Id != id {
-				continue
+		switch {
+		case query.Get("name") != "":
+			for _, user := range users {
+				if user.Name == query.Get("name") {
+					filtered = append(filtered, user)
+				}
 			}
-
-			if email := query.Get("email"); email != "" && user.Email != email {
-				continue
+		case query.Get("email") != "":
+			for _, user := range users {
+				if user.Email == query.Get("email") {
+					filtered = append(filtered, user)
+				}
 			}
-
-			filtered = append(filtered, user)
+		case query.Get("id") != "":
+			for _, user := range users {
+				if user.Id == query.Get("id") {
+					filtered = append(filtered, user)
+				}
+			}
+		default:
+			filtered = users
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -121,6 +130,48 @@ func TestResolveSingleUser(t *testing.T) {
 				"id=9 name=hannes@rueger.events email=hannes@rueger.events",
 				"id=10 name=hannes@rueger.events email=other@example.com",
 			},
+		},
+		{
+			// Both --name and --identifier: the server's name-first
+			// precedence returns every alice, but the pinned id
+			// selects exactly the right one client-side.
+			name:       "name and identifier resolve to the pinned id",
+			users:      []clientv1.User{{Id: "3", Name: "alice"}, {Id: "7", Name: "alice"}, {Id: "9", Name: "bob"}},
+			identifier: "3",
+			flagName:   "alice",
+			wantId:     "3",
+		},
+		{
+			// An ambiguous name with a pinned id that matches one of
+			// the name-matched users resolves to that single user,
+			// as the ambiguity error message promises.
+			name:       "ambiguous name with matching identifier resolves to one",
+			users:      []clientv1.User{{Id: "3", Name: "alice"}, {Id: "7", Name: "alice"}},
+			identifier: "3",
+			flagName:   "alice",
+			wantId:     "3",
+		},
+		{
+			// The name matches a single user whose id differs from
+			// the pinned identifier: the command must not silently
+			// operate on the name-matched user.
+			name:       "name match with non-matching identifier is not found",
+			users:      []clientv1.User{{Id: "7", Name: "alice"}, {Id: "9", Name: "bob"}},
+			identifier: "3",
+			flagName:   "alice",
+			wantErr:    true,
+			wantErrIs:  errUserNotFound,
+		},
+		{
+			// An ambiguous name with a pinned id that matches none of
+			// the name-matched users is a not-found, not a wrong-user
+			// write.
+			name:       "ambiguous name with non-matching identifier is not found",
+			users:      []clientv1.User{{Id: "7", Name: "alice"}, {Id: "8", Name: "alice"}},
+			identifier: "3",
+			flagName:   "alice",
+			wantErr:    true,
+			wantErrIs:  errUserNotFound,
 		},
 		{
 			// Regression: --identifier 0 was sent to the API as "no

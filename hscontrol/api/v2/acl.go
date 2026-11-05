@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/juanfont/headscale/hscontrol/state"
 	"github.com/juanfont/headscale/hscontrol/types"
 	"github.com/juanfont/headscale/hscontrol/util"
+	"github.com/tailscale/hujson"
 )
 
 func init() {
@@ -142,7 +144,7 @@ func registerACL(api huma.API, b Backend) {
 			return nil, mapError("setting policy", err)
 		}
 
-		return streamPolicy([]byte(updated.Data), aclContentType(in.Accept)), nil
+		return streamPolicy([]byte(updated.Data), aclWriteContentType(in.Accept)), nil
 	})
 
 	registerValidateACL(api, b, aclTags)
@@ -235,25 +237,48 @@ func currentPolicy(b Backend) ([]byte, error) {
 	return nil, huma.Error500InternalServerError("unsupported policy mode", nil)
 }
 
-// streamPolicy writes the policy bytes as-is with the chosen content type and
-// a content-addressed ETag, bypassing huma's JSON marshaler so HuJSON survives.
+// streamPolicy writes the policy bytes with the chosen content type and a
+// content-addressed ETag, bypassing huma's JSON marshaler so HuJSON survives.
+// When serving as application/json, the HuJSON is standardized to valid JSON
+// (comments and trailing commas removed) so strict JSON clients can parse it;
+// the ETag stays over the stored bytes so both read variants share it.
 func streamPolicy(data []byte, contentType string) *huma.StreamResponse {
 	return &huma.StreamResponse{Body: func(ctx huma.Context) {
 		ctx.SetHeader("Content-Type", contentType)
 		ctx.SetHeader("ETag", policyETag(data))
 		ctx.SetStatus(http.StatusOK)
-		_, _ = ctx.BodyWriter().Write(data)
+
+		body := data
+		if contentType == contentTypeJSON {
+			std, err := hujson.Standardize(slices.Clone(data))
+			if err == nil {
+				body = std
+			}
+		}
+
+		_, _ = ctx.BodyWriter().Write(body)
 	}}
 }
 
 // aclContentType serves HuJSON only when explicitly asked; everything else
-// (including an empty Accept) gets application/json. The bytes are identical.
+// (including an empty Accept) gets application/json. The bytes are standardized
+// in streamPolicy when served as JSON.
 func aclContentType(accept string) string {
 	if strings.Contains(accept, contentTypeHuJSON) {
 		return contentTypeHuJSON
 	}
 
 	return contentTypeJSON
+}
+
+// aclWriteContentType answers a write as application/hujson unless the caller
+// explicitly asks for application/json, matching Tailscale SaaS.
+func aclWriteContentType(accept string) string {
+	if strings.Contains(accept, contentTypeJSON) {
+		return contentTypeJSON
+	}
+
+	return contentTypeHuJSON
 }
 
 // policyETag is the quoted hex SHA-256 of the policy bytes: stable across reads,

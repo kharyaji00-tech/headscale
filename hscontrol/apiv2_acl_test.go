@@ -84,8 +84,14 @@ func TestAPIv2ACLContentNegotiation(t *testing.T) {
 
 	assert.Equal(t, "application/json", jsonResp.Header().Get("Content-Type"))
 	assert.Equal(t, "application/hujson", huResp.Header().Get("Content-Type"))
-	// Same bytes, same ETag — the ETag is over content, not type.
-	assert.Equal(t, jsonResp.Body.Bytes(), huResp.Body.Bytes())
+
+	// The JSON response is valid strict JSON (no comments or trailing commas).
+	assert.True(t, json.Valid(jsonResp.Body.Bytes()), "JSON response must be valid JSON: %s", jsonResp.Body)
+
+	// The HuJSON response preserves comments from the default policy.
+	assert.Contains(t, huResp.Body.String(), "//")
+
+	// Same ETag — the ETag is over the stored bytes, not the served bytes.
 	assert.Equal(t, jsonResp.Header().Get("Etag"), huResp.Header().Get("Etag"))
 }
 
@@ -372,11 +378,20 @@ func TestAPIv2ACLFileModeReadOnly(t *testing.T) {
 	_, api := humatest.New(t, apiv2.Config())
 	apiv2.Register(api, apiv2.Backend{Cfg: cfg})
 
-	// GET serves the file bytes + their ETag.
-	get := api.Get("/api/v2/tailnet/-/acl")
-	require.Equalf(t, http.StatusOK, get.Code, "body: %s", get.Body)
-	assert.Equal(t, fileBytes, get.Body.String())
-	assert.Equal(t, policyETagOf(fileBytes), get.Header().Get("Etag"))
+	// GET with Accept: application/hujson serves the raw file bytes + their ETag.
+	huGet := api.Get("/api/v2/tailnet/-/acl", "Accept: application/hujson")
+	require.Equalf(t, http.StatusOK, huGet.Code, "body: %s", huGet.Body)
+	assert.Equal(t, "application/hujson", huGet.Header().Get("Content-Type"))
+	assert.Equal(t, fileBytes, huGet.Body.String())
+	assert.Equal(t, policyETagOf(fileBytes), huGet.Header().Get("Etag"))
+
+	// GET with no Accept (defaults to application/json) serves valid JSON.
+	jsonGet := api.Get("/api/v2/tailnet/-/acl")
+	require.Equalf(t, http.StatusOK, jsonGet.Code, "body: %s", jsonGet.Body)
+	assert.Equal(t, "application/json", jsonGet.Header().Get("Content-Type"))
+	assert.True(t, json.Valid(jsonGet.Body.Bytes()), "JSON response must be valid JSON: %s", jsonGet.Body)
+	// Same ETag over the stored bytes.
+	assert.Equal(t, policyETagOf(fileBytes), jsonGet.Header().Get("Etag"))
 
 	// POST is rejected in file mode; the file is unchanged.
 	set := setACL(t, api, allowAllPolicy, "application/json")

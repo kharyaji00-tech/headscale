@@ -25,9 +25,12 @@ type PolicyRequestBody struct {
 
 // PolicyResponseBody is the v1.GetPolicyResponse/SetPolicyResponse body. Fields
 // carry no omitempty so zero values are emitted (EmitUnpopulated parity).
+// UpdatedAt is a pointer so a nil source (file mode, where the policy has no
+// database-backed timestamp) is emitted as JSON null, matching protojson's unset
+// Timestamp — the same nullable pattern used by ApiKey and Node.
 type PolicyResponseBody struct {
-	Policy    string    `json:"policy"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	Policy    string     `json:"policy"`
+	UpdatedAt *time.Time `json:"updatedAt" nullable:"true"`
 }
 
 type (
@@ -69,7 +72,7 @@ func registerPolicy(api huma.API, b Backend) {
 
 			out := &getPolicyOutput{}
 			out.Body.Policy = p.Data
-			out.Body.UpdatedAt = p.UpdatedAt
+			out.Body.UpdatedAt = &p.UpdatedAt
 
 			return out, nil
 		case types.PolicyModeFile:
@@ -124,7 +127,7 @@ func registerPolicy(api huma.API, b Backend) {
 
 		out := &setPolicyOutput{}
 		out.Body.Policy = updated.Data
-		out.Body.UpdatedAt = updated.UpdatedAt
+		out.Body.UpdatedAt = &updated.UpdatedAt
 
 		return out, nil
 	})

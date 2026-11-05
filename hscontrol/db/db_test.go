@@ -327,15 +327,12 @@ func createSQLiteFromSQLFile(sqlFilePath, dbPath string) error {
 	return err
 }
 
-// requireConstraintFailed checks if the error is a constraint failure with
-// either SQLite and PostgreSQL error messages.
+// requireConstraintFailed checks if the error is a unique-key constraint failure.
+// With TranslateError enabled, both SQLite and PostgreSQL return gorm.ErrDuplicatedKey.
 func requireConstraintFailed(t *testing.T, err error) {
 	t.Helper()
 	require.Error(t, err)
-
-	if !strings.Contains(err.Error(), "UNIQUE constraint failed:") && !strings.Contains(err.Error(), "violates unique constraint") {
-		require.Failf(t, "expected error to contain a constraint failure, got: %s", err.Error())
-	}
+	require.ErrorIs(t, err, gorm.ErrDuplicatedKey)
 }
 
 func TestConstraints(t *testing.T) {

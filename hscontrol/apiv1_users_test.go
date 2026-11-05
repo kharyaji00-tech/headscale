@@ -59,6 +59,12 @@ func TestAPIV1RenameUser(t *testing.T) {
 			"/api/v1/user/1/rename/bob", nil)
 	})
 
+	t.Run("duplicate name parity", func(t *testing.T) {
+		res := assertParityIsolated(t, seedUsers("alice", "bob"), http.MethodPost,
+			"/api/v1/user/2/rename/alice", nil)
+		assertStatus(t, res, http.StatusConflict)
+	})
+
 	t.Run("nonexistent parity", func(t *testing.T) {
 		h := newAPIV1Harness(t)
 		res := h.assertParity(t, http.MethodPost, "/api/v1/user/999/rename/bob", nil)

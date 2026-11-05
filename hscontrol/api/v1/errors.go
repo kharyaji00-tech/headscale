@@ -57,7 +57,8 @@ func mapError(msg string, err error) error {
 
 	case errors.Is(err, state.ErrNodeKeyInUse),
 		errors.Is(err, state.ErrAmbiguousNodeOwnership),
-		errors.Is(err, state.ErrAuthCacheEntryExists):
+		errors.Is(err, state.ErrAuthCacheEntryExists),
+		errors.Is(err, gorm.ErrDuplicatedKey):
 		return huma.Error409Conflict(msg, err)
 
 	default:

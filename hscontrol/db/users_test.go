@@ -382,7 +382,7 @@ func TestRenameUser(t *testing.T) {
 
 				err := db.RenameUser(types.UserID(userTest2.ID), "test")
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), "UNIQUE constraint failed")
+				assert.ErrorIs(t, err, gorm.ErrDuplicatedKey)
 			},
 		},
 	}

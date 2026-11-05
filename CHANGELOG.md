@@ -204,6 +204,7 @@ the ACME DNS-01 challenge through a built-in DNS provider: `acmedns`,
 - User renames and OIDC updates refresh node users and clients without restarting Headscale. [#3471](https://github.com/juanfont/headscale/issues/3471), [#3619](https://github.com/juanfont/headscale/pull/3619)
 - Routers receive their own approved routes regardless of policy. [#3626](https://github.com/juanfont/headscale/issues/3626), [#3619](https://github.com/juanfont/headscale/pull/3619)
 - `.json` files in `dns.extra_records_path` and `derp.paths` may contain comments and trailing commas, like `.hujson` files [#3627](https://github.com/juanfont/headscale/issues/3627)
+- `GET /api/v1/policy` in file mode now emits `"updatedAt": null` instead of the Go zero instant `"0001-01-01T00:00:00Z"`, matching the legacy protojson contract for an unset timestamp
 
 ## 0.29.7 (2026-10-30)
 

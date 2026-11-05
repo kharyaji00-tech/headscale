@@ -3,6 +3,8 @@ package hscontrol
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -59,6 +61,36 @@ func TestAPIV1PolicyGet(t *testing.T) {
 		assert.JSONEq(t, validPolicy, got.Policy)
 		// updatedAt is emitted even though no omitempty is set.
 		assert.NotEmpty(t, got.UpdatedAt)
+	})
+
+	t.Run("file mode emits null updatedAt", func(t *testing.T) {
+		// In file mode the policy has no database-backed timestamp, so
+		// updatedAt must be JSON null — matching the legacy protojson contract
+		// for an unset google.protobuf.Timestamp — not the Go zero instant
+		// "0001-01-01T00:00:00Z".
+		app := createFilePolicyAppWithPolicy(t, validPolicy)
+
+		res := callHandler(newHumaTestHandler(app), http.MethodGet, "/api/v1/policy", nil)
+		require.Equalf(t, http.StatusOK, res.status, "body: %s", res.body)
+
+		// Guard against the regression: the zero instant must never appear.
+		assert.NotContains(t, string(res.body), "0001-01-01T00:00:00Z")
+
+		var got struct {
+			Policy    string  `json:"policy"`
+			UpdatedAt *string `json:"updatedAt"`
+		}
+		require.NoError(t, json.Unmarshal(res.body, &got))
+
+		assert.JSONEq(t, validPolicy, got.Policy)
+		assert.Nil(t, got.UpdatedAt, "updatedAt must be null in file mode")
+	})
+
+	t.Run("file mode parity", func(t *testing.T) {
+		app := createFilePolicyAppWithPolicy(t, validPolicy)
+
+		hum := callHandler(newHumaTestHandler(app), http.MethodGet, "/api/v1/policy", nil)
+		assertAgainstGolden(t, http.MethodGet, "/api/v1/policy", hum)
 	})
 }
 
@@ -213,6 +245,52 @@ func createFilePolicyApp(t *testing.T) *Headscale {
 		OIDC: types.OIDCConfig{},
 		Policy: types.PolicyConfig{
 			Mode: types.PolicyModeFile,
+		},
+		Tuning: types.Tuning{
+			BatchChangeDelay: 100 * time.Millisecond,
+			BatcherWorkers:   1,
+		},
+	}
+
+	app, err := NewHeadscale(&cfg)
+	require.NoError(t, err)
+
+	app.mapBatcher = mapper.NewBatcherAndMapper(&cfg, app.state)
+	app.mapBatcher.Start()
+
+	t.Cleanup(func() {
+		if app.mapBatcher != nil {
+			app.mapBatcher.Close()
+		}
+	})
+
+	return app
+}
+
+// createFilePolicyAppWithPolicy mirrors createFilePolicyApp but also writes the
+// given policy to a file and points the config at it, so the file-mode GET
+// path can be exercised.
+func createFilePolicyAppWithPolicy(t *testing.T, policy string) *Headscale {
+	t.Helper()
+
+	tmpDir := t.TempDir()
+
+	policyPath := filepath.Join(tmpDir, "policy.hujson")
+	require.NoError(t, os.WriteFile(policyPath, []byte(policy), 0o600))
+
+	cfg := types.Config{
+		ServerURL:           "http://localhost:8080",
+		NoisePrivateKeyPath: tmpDir + "/noise_private.key",
+		Database: types.DatabaseConfig{
+			Type: "sqlite3",
+			Sqlite: types.SqliteConfig{
+				Path: tmpDir + "/headscale_test.db",
+			},
+		},
+		OIDC: types.OIDCConfig{},
+		Policy: types.PolicyConfig{
+			Mode: types.PolicyModeFile,
+			Path: policyPath,
 		},
 		Tuning: types.Tuning{
 			BatchChangeDelay: 100 * time.Millisecond,

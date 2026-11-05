@@ -274,8 +274,8 @@ type PolicyRequestBody struct {
 
 // PolicyResponseBody defines model for PolicyResponseBody.
 type PolicyResponseBody struct {
-	Policy    string    `json:"policy"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	Policy    string     `json:"policy"`
+	UpdatedAt *time.Time `json:"updatedAt"`
 }
 
 // PreAuthKey defines model for PreAuthKey.

@@ -66,7 +66,11 @@ func initConfig() {
 
 	logFormat := viper.GetString("log.format")
 	if logFormat == types.JSONLogFormat {
-		log.Logger = log.Output(os.Stdout)
+		// Route JSON logs to stderr so they can never interleave with
+		// machine-readable output (json/json-line/yaml) on stdout. The
+		// text-format ConsoleWriter in cmd/headscale/headscale.go already
+		// uses stderr; this keeps the two formats consistent.
+		log.Logger = log.Output(os.Stderr)
 	}
 
 	disableUpdateCheck := viper.GetBool("disable_check_updates")

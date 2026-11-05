@@ -1522,7 +1522,13 @@ func LoadCLIConfig() (*Config, error) {
 	}
 
 	logConfig := logConfig()
-	zerolog.SetGlobalLevel(logConfig.Level)
+	// initConfig() disables logging (zerolog.Disabled) when machine-readable
+	// output is requested so stdout stays parseable. Honour that suppression
+	// instead of undoing it with the configured level, which would leak
+	// debug/trace log lines into the command's JSON/YAML stdout output.
+	if zerolog.GlobalLevel() != zerolog.Disabled {
+		zerolog.SetGlobalLevel(logConfig.Level)
+	}
 
 	return &Config{
 		DisableUpdateCheck: viper.GetBool("disable_check_updates"),

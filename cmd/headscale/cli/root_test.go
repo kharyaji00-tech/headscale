@@ -2,14 +2,18 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/juanfont/headscale/hscontrol/db"
 	"github.com/juanfont/headscale/hscontrol/types"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -415,4 +419,62 @@ dns:
 			}
 		})
 	}
+}
+
+// TestInitConfigJSONLogsGoToStderr verifies that when log.format is json,
+// log entries are routed to stderr (not stdout) so they can never interleave
+// with machine-readable output on stdout.
+func TestInitConfigJSONLogsGoToStderr(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+
+	previousLevel := zerolog.GlobalLevel()
+	previousLogger := log.Logger
+	previousCfgFile := cfgFile
+	previousArgs := os.Args
+
+	t.Cleanup(func() {
+		zerolog.SetGlobalLevel(previousLevel)
+
+		log.Logger = previousLogger
+		cfgFile = previousCfgFile
+		os.Args = previousArgs
+	})
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("log:\n  format: json\ndisable_check_updates: true\n"), 0o600))
+
+	cfgFile = path
+	os.Args = []string{"headscale", "users", "list"}
+
+	zerolog.SetGlobalLevel(zerolog.DebugLevel)
+
+	rStdout, wStdout, err := os.Pipe()
+	require.NoError(t, err)
+	rStderr, wStderr, err := os.Pipe()
+	require.NoError(t, err)
+
+	origStdout := os.Stdout
+	origStderr := os.Stderr
+	os.Stdout = wStdout
+	os.Stderr = wStderr
+
+	initConfig()
+	log.Debug().Msg("json log routing test message")
+
+	os.Stdout = origStdout
+	os.Stderr = origStderr
+
+	wStdout.Close()
+	wStderr.Close()
+
+	stdoutBytes, err := io.ReadAll(rStdout)
+	require.NoError(t, err)
+	stderrBytes, err := io.ReadAll(rStderr)
+	require.NoError(t, err)
+
+	assert.NotContains(t, string(stdoutBytes), "json log routing test message",
+		"JSON log lines must not appear on stdout")
+	assert.Contains(t, string(stderrBytes), "json log routing test message",
+		"JSON log lines should go to stderr")
 }

@@ -1827,3 +1827,36 @@ func TestLoadCLIConfigRejectsNonBoolean(t *testing.T) {
 		})
 	}
 }
+
+// TestLoadCLIConfigHonoursMachineOutputLogSuppression verifies that
+// LoadCLIConfig does not undo the zerolog.Disabled level that initConfig
+// sets when machine-readable output is requested. Re-enabling logging
+// would leak debug/trace log lines into the command's JSON/YAML stdout.
+func TestLoadCLIConfigHonoursMachineOutputLogSuppression(t *testing.T) {
+	viper.Reset()
+	t.Cleanup(viper.Reset)
+
+	previousLevel := zerolog.GlobalLevel()
+
+	t.Cleanup(func() { zerolog.SetGlobalLevel(previousLevel) })
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("log:\n  level: debug\n  format: json\n"), 0o600))
+	require.NoError(t, LoadConfig(path, true))
+
+	// Simulate initConfig() disabling logging for machine-readable output.
+	zerolog.SetGlobalLevel(zerolog.Disabled)
+
+	_, err := LoadCLIConfig()
+	require.NoError(t, err)
+	assert.Equal(t, zerolog.Disabled, zerolog.GlobalLevel(),
+		"LoadCLIConfig must not re-enable logging after initConfig disabled it for machine output")
+
+	// When logging has not been disabled, LoadCLIConfig sets the level from config.
+	zerolog.SetGlobalLevel(zerolog.InfoLevel)
+
+	_, err = LoadCLIConfig()
+	require.NoError(t, err)
+	assert.Equal(t, zerolog.DebugLevel, zerolog.GlobalLevel(),
+		"LoadCLIConfig should set the log level from config when not disabled")
+}

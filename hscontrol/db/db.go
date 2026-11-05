@@ -523,7 +523,8 @@ func openDB(cfg types.DatabaseConfig) (*gorm.DB, error) {
 		db, err := gorm.Open(
 			sqlite.Open(connectionURL),
 			&gorm.Config{
-				Logger: dbLogger,
+				Logger:         dbLogger,
+				TranslateError: true,
 			},
 		)
 		if err != nil {
@@ -555,7 +556,8 @@ func openDB(cfg types.DatabaseConfig) (*gorm.DB, error) {
 			Msg("Opening database")
 
 		db, err := gorm.Open(postgres.Open(cfg.Postgres.DSN()), &gorm.Config{
-			Logger: dbLogger,
+			Logger:         dbLogger,
+			TranslateError: true,
 		})
 		if err != nil {
 			return nil, err

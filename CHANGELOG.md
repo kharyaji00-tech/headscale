@@ -204,6 +204,7 @@ the ACME DNS-01 challenge through a built-in DNS provider: `acmedns`,
 - User renames and OIDC updates refresh node users and clients without restarting Headscale. [#3471](https://github.com/juanfont/headscale/issues/3471), [#3619](https://github.com/juanfont/headscale/pull/3619)
 - Routers receive their own approved routes regardless of policy. [#3626](https://github.com/juanfont/headscale/issues/3626), [#3619](https://github.com/juanfont/headscale/pull/3619)
 - `.json` files in `dns.extra_records_path` and `derp.paths` may contain comments and trailing commas, like `.hujson` files [#3627](https://github.com/juanfont/headscale/issues/3627)
+- Fix the v2 ACL API serving HuJSON (comments, trailing commas) under a `application/json` content type, so strict JSON clients (`curl | jq`, Python `resp.json()`, JS `fetch().json()`) fail to parse the policy. A `application/json` read now standardizes HuJSON to valid JSON; the ETag stays over the stored bytes so both read variants share it. The write response answers `application/hujson` unless the caller's `Accept` asks for `application/json`, matching Tailscale SaaS
 
 ## 0.29.7 (2026-10-30)
 

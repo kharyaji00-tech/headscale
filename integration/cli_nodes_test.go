@@ -1001,6 +1001,7 @@ func TestNodeCommandValidation(t *testing.T) {
 		{"approve missing identifier", []string{"nodes", "approve-routes", "--routes", "10.0.0.0/24"}, "identifier"},
 		{"approve nonexistent", []string{"nodes", "approve-routes", "--identifier", "99999", "--routes", "10.0.0.0/24"}, ""},
 		{"approve invalid cidr", []string{"nodes", "approve-routes", "--identifier", id, "--routes", "notacidr"}, "parsing route"},
+		{"list-routes nonexistent", []string{"nodes", "list-routes", "--identifier", "99999"}, "node not found"},
 		// The deprecated `nodes register` alias drives its own RegisterNode path;
 		// cover its error cases (the happy path is covered via `auth register`).
 		{"register nonexistent user", []string{"nodes", "register", "--user", "ghost", "--key", types.MustAuthID().String()}, ""},

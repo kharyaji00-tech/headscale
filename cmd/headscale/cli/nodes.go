@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/netip"
@@ -16,6 +17,8 @@ import (
 	"github.com/spf13/cobra"
 	"tailscale.com/types/key"
 )
+
+var errNodeNotFound = errors.New("node not found")
 
 func init() {
 	rootCmd.AddCommand(nodeCmd)
@@ -149,12 +152,19 @@ var listNodeRoutesCmd = &cobra.Command{
 
 		if identifier != 0 {
 			idStr := strconv.FormatUint(identifier, util.Base10)
+			found := false
+
 			for _, node := range nodes {
 				if node.Id == idStr {
 					nodes = []clientv1.Node{node}
+					found = true
 
 					break
 				}
+			}
+
+			if !found {
+				return fmt.Errorf("%w: %d", errNodeNotFound, identifier)
 			}
 		}
 

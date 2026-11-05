@@ -31,25 +31,49 @@ import (
 // Caps the client reads from the peer view rather than the self view
 // ([tailcfg.NodeAttrSuggestExitNode], read by
 // [tailscale.com/ipn/ipnlocal.LocalBackend.SuggestExitNode], and
-// [tailcfg.NodeAttrDNSSubdomainResolve]) are emitted only when the
-// peer satisfies the cap's emission condition. This function encodes
-// those conditions; the mapper calls it from
-// [mapper.MapResponseBuilder.buildTailPeers] and the compat test calls
-// it to compute the expected per-peer wire shape.
+// [tailcfg.NodeAttrDNSSubdomainResolve], read by
+// [tailscale.com/ipn/ipnlocal.LocalBackend.magicDNSSubdomainHost] for
+// peer resolution) are emitted only when the peer satisfies the cap's
+// emission condition. This function encodes those conditions; the
+// mapper calls it from [mapper.MapResponseBuilder.buildTailPeers] and
+// the compat test calls it to compute the expected per-peer wire shape.
+//
+// The two caps have distinct emission conditions:
+//   - [nodecap.SuggestExitNode] is gated on exit-route approval
+//     ([types.NodeView.IsExitNode]); SaaS stamps it by default on every
+//     approved exit node, with or without a nodeAttrs grant.
+//   - [nodecap.DNSSubdomainResolve] is gated on a nodeAttrs grant
+//     (presence in peerSelfCaps); it must reach the peer view so other
+//     clients can resolve subdomains of this peer's MagicDNS name.
 func PeerCapMap(peer types.NodeView, peerSelfCaps tailcfg.NodeCapMap) tailcfg.NodeCapMap {
+	var out tailcfg.NodeCapMap
+
 	// suggest-exit-node — surfaced on Peer.CapMap when the peer
 	// advertises exit routes AND those routes are approved, with or
 	// without a nodeAttrs grant: SaaS stamps it by default, and Apple
 	// clients hide the exit-node list without a suggestion. A policy
 	// value, if any, wins. Approval gating prevents the suggestion from
 	// following an advertised-but-not-yet-trusted node.
-	if !peer.IsExitNode() {
-		return nil
+	if peer.IsExitNode() {
+		out = tailcfg.NodeCapMap{
+			nodecap.SuggestExitNode: peerSelfCaps[nodecap.SuggestExitNode],
+		}
 	}
 
-	return tailcfg.NodeCapMap{
-		nodecap.SuggestExitNode: peerSelfCaps[nodecap.SuggestExitNode],
+	// dns-subdomain-resolve — peer-consumed: other clients resolve
+	// subdomains of this peer's MagicDNS name only if the cap is on
+	// the peer view. Unlike suggest-exit-node it is gated on a
+	// nodeAttrs grant (presence in peerSelfCaps), not on exit-route
+	// approval, so it must be emitted for non-exit nodes too.
+	if v, ok := peerSelfCaps[nodecap.DNSSubdomainResolve]; ok {
+		if out == nil {
+			out = tailcfg.NodeCapMap{}
+		}
+
+		out[nodecap.DNSSubdomainResolve] = v
 	}
+
+	return out
 }
 
 // unmodelledTailnetStateCaps lists [tailcfg.NodeCapability] values

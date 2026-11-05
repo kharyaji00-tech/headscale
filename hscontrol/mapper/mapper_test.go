@@ -1907,6 +1907,7 @@ func TestBuildTailPeersCapMapsReference(t *testing.T) {
 		{"empty", `[]`},
 		{"partial", `[{"target":["100.64.0.2"],"attr":["disable-ipv4","suggest-exit-node"]}]`},
 		{"all", `[{"target":["*"],"attr":["disable-ipv4","suggest-exit-node"]}]`},
+		{"dns-subdomain-resolve", `[{"target":["*"],"attr":["dns-subdomain-resolve"]}]`},
 	} {
 		t.Run(attrs.name, func(t *testing.T) {
 			m, nodes := capMapsMapperFixture(t, 5, attrs.policy)
@@ -1945,15 +1946,27 @@ func TestBuildTailPeersCapMapsReference(t *testing.T) {
 						if peer.ID == nodes[1].ID().NodeID() {
 							require.Contains(t, peer.CapMap, nodecap.SuggestExitNode)
 
-							if attrs.name != "empty" {
+							if attrs.name == "partial" || attrs.name == "all" {
 								require.Equal(t, []netip.Prefix{netip.PrefixFrom(nodes[1].IPv6().Get(), 128)}, peer.Addresses)
 								require.NotContains(t, peer.CapMap, nodecap.Cap("disable-ipv4"), "self caps must not leak into the peer view")
 							}
 						}
 
+						// dns-subdomain-resolve is granted to "*", so
+						// every node in the fixture's policy set must
+						// carry it on the peer view. The "missing"
+						// peer (ID 999) is not in the policy manager's
+						// node list, so it has no self caps and no
+						// peer-consumed cap.
+						if attrs.name == "dns-subdomain-resolve" && peer.ID != missing.ID.NodeID() {
+							require.Contains(t, peer.CapMap, nodecap.DNSSubdomainResolve,
+								"dns-subdomain-resolve must be emitted on the peer view when granted to *")
+						}
+
 						if peer.CapMap != nil {
 							peer.CapMap["caller-only"] = nil
 							delete(peer.CapMap, nodecap.SuggestExitNode)
+							delete(peer.CapMap, nodecap.DNSSubdomainResolve)
 						}
 					}
 

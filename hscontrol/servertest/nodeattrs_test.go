@@ -466,6 +466,133 @@ func TestSuggestExitNodeDefaultOnPeerCapMap(t *testing.T) {
 		10*time.Second, peerHasCap(false))
 }
 
+// TestNodeAttrsDNSSubdomainResolveOnPeerCapMap covers the runtime
+// peer-cap path for dns-subdomain-resolve: when the policy targets a
+// node with the attr, the cap must land on [tailcfg.Node.CapMap] of
+// the *peer view* in every other client's netmap — not only on the
+// granted node's own SelfNode.CapMap. The Tailscale client reads this
+// cap from the peer view when resolving subdomains of another node's
+// MagicDNS name (see [tailscale.com/ipn/ipnlocal.LocalBackend.magicDNSSubdomainHost]),
+// so a self-view-only stamp breaks the feature for its primary use
+// case (peers resolving anything.<node>.<tailnet>).
+//
+// Unlike suggest-exit-node, dns-subdomain-resolve is gated on a
+// nodeAttrs grant rather than exit-route approval, so the test does
+// not advertise or approve any routes.
+func TestNodeAttrsDNSSubdomainResolveOnPeerCapMap(t *testing.T) {
+	t.Parallel()
+
+	srv := servertest.NewServer(t)
+	user := srv.CreateUser(t, "dnsr-user")
+
+	target := servertest.NewClient(t, srv, "dnsr-target", servertest.WithUser(user))
+	viewer := servertest.NewClient(t, srv, "dnsr-viewer", servertest.WithUser(user))
+
+	target.WaitForPeers(t, 1, 10*time.Second)
+	viewer.WaitForPeers(t, 1, 10*time.Second)
+
+	// Grant dns-subdomain-resolve to every node. The cap must reach
+	// the peer view so other clients can resolve subdomains of the
+	// granted node's MagicDNS name.
+	reloadPolicy(t, srv, `{
+		"nodeAttrs": [{
+			"target": ["*"],
+			"attr":   ["dns-subdomain-resolve"]
+		}]
+	}`)
+
+	// Self-side: the target node sees the cap on its own SelfNode.
+	target.WaitForCondition(t, "self dns-subdomain-resolve on target", 10*time.Second,
+		func(nm *netmap.NetworkMap) bool {
+			return hasCap(nm, nodecap.DNSSubdomainResolve)
+		})
+	viewer.WaitForCondition(t, "self dns-subdomain-resolve on viewer", 10*time.Second,
+		func(nm *netmap.NetworkMap) bool {
+			return hasCap(nm, nodecap.DNSSubdomainResolve)
+		})
+
+	// Peer-side: the viewer sees the target node in its Peers list
+	// with the cap on the peer entry. This is the property the
+	// PeerCapMap fix guards — without it the peer entry's CapMap
+	// stays empty and subdomain resolution fails on every other
+	// machine.
+	viewer.WaitForCondition(t, "peer dns-subdomain-resolve on target's peer entry", 10*time.Second,
+		func(nm *netmap.NetworkMap) bool {
+			if nm == nil {
+				return false
+			}
+
+			for _, peer := range nm.Peers {
+				if peer.ComputedName() != "dnsr-target" {
+					continue
+				}
+
+				return peer.CapMap().Contains(nodecap.DNSSubdomainResolve)
+			}
+
+			return false
+		})
+
+	// Symmetric: the target's peer view of the viewer must also carry
+	// the cap, since both nodes are in the target set.
+	target.WaitForCondition(t, "peer dns-subdomain-resolve on viewer's peer entry", 10*time.Second,
+		func(nm *netmap.NetworkMap) bool {
+			if nm == nil {
+				return false
+			}
+
+			for _, peer := range nm.Peers {
+				if peer.ComputedName() != "dnsr-viewer" {
+					continue
+				}
+
+				return peer.CapMap().Contains(nodecap.DNSSubdomainResolve)
+			}
+
+			return false
+		})
+}
+
+// TestNodeAttrsDNSSubdomainResolveNotGrantedOnPeerCapMap covers the
+// negative case: without a dns-subdomain-resolve grant, the cap must
+// not appear on any peer entry's CapMap. This locks in the emission
+// condition — the cap is grant-gated, not default-on.
+func TestNodeAttrsDNSSubdomainResolveNotGrantedOnPeerCapMap(t *testing.T) {
+	t.Parallel()
+
+	srv := servertest.NewServer(t)
+	user := srv.CreateUser(t, "dnsr-ng-user")
+
+	c1 := servertest.NewClient(t, srv, "dnsr-ng-1", servertest.WithUser(user))
+	c2 := servertest.NewClient(t, srv, "dnsr-ng-2", servertest.WithUser(user))
+
+	c1.WaitForPeers(t, 1, 10*time.Second)
+	c2.WaitForPeers(t, 1, 10*time.Second)
+
+	// No nodeAttrs grant at all — the default empty policy. The cap
+	// must not appear on self or peer views.
+	reloadPolicy(t, srv, `{}`)
+
+	c1.WaitForCondition(t, "no dns-subdomain-resolve anywhere on c1", 10*time.Second,
+		func(nm *netmap.NetworkMap) bool {
+			if nm == nil {
+				return false
+			}
+
+			if hasCap(nm, nodecap.DNSSubdomainResolve) {
+				return false
+			}
+
+			for _, peer := range nm.Peers {
+				if peer.CapMap().Contains(nodecap.DNSSubdomainResolve) {
+					return false
+				}
+			}
+
+			return true
+		})
+}
+
 // firstResolver returns the address of the first DNS resolver in nm.
 func firstResolver(nm *netmap.NetworkMap) string {
 	if nm == nil || len(nm.DNS.Resolvers) == 0 {
